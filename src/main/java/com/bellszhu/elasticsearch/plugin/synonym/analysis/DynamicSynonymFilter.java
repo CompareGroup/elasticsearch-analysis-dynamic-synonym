@@ -22,7 +22,12 @@ import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.synonym.SynonymMap;
 import org.apache.lucene.analysis.tokenattributes.*;
 import org.apache.lucene.store.ByteArrayDataInput;
-import org.apache.lucene.util.*;
+import org.apache.lucene.util.ArrayUtil;
+import org.apache.lucene.util.AttributeSource;
+import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.CharsRef;
+import org.apache.lucene.util.CharsRefBuilder;
+import org.apache.lucene.util.RamUsageEstimator;
 import org.apache.lucene.util.fst.FST;
 
 import java.io.IOException;
