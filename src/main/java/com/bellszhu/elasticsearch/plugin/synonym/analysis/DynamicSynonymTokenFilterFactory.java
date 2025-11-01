@@ -44,9 +44,32 @@ public class DynamicSynonymTokenFilterFactory extends
     private static final ScheduledExecutorService pool = Executors.newScheduledThreadPool(1, r -> {
         Thread thread = new Thread(r);
         thread.setName("monitor-synonym-Thread-" + id.getAndAdd(1));
+        thread.setDaemon(true); // Make thread daemon to prevent JVM hang
         return thread;
     });
+
+    // Add shutdown hook to clean up thread pool on JVM shutdown
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutting down synonym monitor thread pool");
+            shutdownPool();
+        }));
+    }
+
+    private static void shutdownPool() {
+        try {
+            pool.shutdown();
+            if (!pool.awaitTermination(5, TimeUnit.SECONDS)) {
+                pool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            pool.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private volatile ScheduledFuture<?> scheduledFuture;
+    private volatile SynonymFile synonymFile; // Keep reference for cleanup
 
     private final String location;
     private final boolean expand;
@@ -161,7 +184,6 @@ public class DynamicSynonymTokenFilterFactory extends
 
     SynonymFile getSynonymFile(Analyzer analyzer) {
         try {
-            SynonymFile synonymFile;
             if (location.startsWith("http://") || location.startsWith("https://")) {
                 synonymFile = new RemoteSynonymFile(
                         environment, analyzer, expand, lenient,  format, location);
@@ -170,14 +192,43 @@ public class DynamicSynonymTokenFilterFactory extends
                         environment, analyzer, expand, lenient, format, location);
             }
             if (scheduledFuture == null) {
-                scheduledFuture = pool.scheduleAtFixedRate(new Monitor(synonymFile),
+                synchronized (this) {
+                    if (scheduledFuture == null) {
+                        scheduledFuture = pool.scheduleAtFixedRate(new Monitor(synonymFile),
                                 interval, interval, TimeUnit.SECONDS);
+                    }
+                }
             }
             return synonymFile;
         } catch (Exception e) {
             logger.error("failed to get synonyms: " + location, e);
             throw new IllegalArgumentException("failed to get synonyms : " + location, e);
         }
+    }
+
+    /**
+     * Close resources and cancel scheduled tasks
+     * Call this when the filter factory is being shut down
+     */
+    public void close() {
+        // Cancel the scheduled task
+        if (scheduledFuture != null && !scheduledFuture.isCancelled()) {
+            scheduledFuture.cancel(false);
+            logger.info("Cancelled synonym monitor task for: {}", location);
+        }
+
+        // Close the synonym file (especially important for RemoteSynonymFile with HttpClient)
+        if (synonymFile != null) {
+            try {
+                synonymFile.close();
+                logger.info("Closed synonym file: {}", location);
+            } catch (IOException e) {
+                logger.error("Error closing synonym file: {}", location, e);
+            }
+        }
+
+        // Clear the filters map
+        dynamicSynonymFilters.clear();
     }
 
     public class Monitor implements Runnable {
@@ -190,12 +241,16 @@ public class DynamicSynonymTokenFilterFactory extends
 
         @Override
         public void run() {
-            if (synonymFile.isNeedReloadSynonymMap()) {
-                synonymMap = synonymFile.reloadSynonymMap();
-                for (AbsSynonymFilter dynamicSynonymFilter : dynamicSynonymFilters.keySet()) {
-                    dynamicSynonymFilter.update(synonymMap);
-                    logger.debug("success reload synonym");
+            try {
+                if (synonymFile.isNeedReloadSynonymMap()) {
+                    synonymMap = synonymFile.reloadSynonymMap();
+                    for (AbsSynonymFilter dynamicSynonymFilter : dynamicSynonymFilters.keySet()) {
+                        dynamicSynonymFilter.update(synonymMap);
+                        logger.debug("success reload synonym");
+                    }
                 }
+            } catch (Exception e) {
+                logger.error("Error in synonym monitor task", e);
             }
         }
     }

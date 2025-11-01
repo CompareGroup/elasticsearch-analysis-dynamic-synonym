@@ -4,6 +4,7 @@
 package com.bellszhu.elasticsearch.plugin.synonym.analysis;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
@@ -30,7 +31,7 @@ import org.elasticsearch.env.Environment;
 /**
  * @author bellszhu
  */
-public class RemoteSynonymFile implements SynonymFile {
+public class RemoteSynonymFile implements SynonymFile, Closeable {
 
     private static final String LAST_MODIFIED_HEADER = "Last-Modified";
     private static final String ETAG_HEADER = "ETag";
@@ -133,7 +134,6 @@ public class RemoteSynonymFile implements SynonymFile {
                 .setConnectTimeout(10 * 1000).setSocketTimeout(60 * 1000)
                 .build();
         CloseableHttpResponse response = null;
-        BufferedReader br = null;
         HttpGet get = new HttpGet(location);
         get.setConfig(rc);
         try {
@@ -148,31 +148,23 @@ public class RemoteSynonymFile implements SynonymFile {
                             .lastIndexOf('=') + 1);
                 }
 
-                br = new BufferedReader(new InputStreamReader(response
-                        .getEntity().getContent(), charset));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    logger.debug("reload remote synonym: {}", line);
-                    sb.append(line)
-                            .append(System.getProperty("line.separator"));
+                // Use try-with-resources to ensure BufferedReader is closed
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(response
+                        .getEntity().getContent(), charset))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        logger.debug("reload remote synonym: {}", line);
+                        sb.append(line)
+                                .append(System.getProperty("line.separator"));
+                    }
+                    reader = new StringReader(sb.toString());
                 }
-                reader = new StringReader(sb.toString());
             } else reader = new StringReader("");
         } catch (Exception e) {
             logger.error("get remote synonym reader {} error!", location, e);
-//            throw new IllegalArgumentException(
-//                    "Exception while reading remote synonyms file", e);
-            // Fix #54 Returns blank if synonym file has be deleted.
             reader = new StringReader("");
         } finally {
-            try {
-                if (br != null) {
-                    br.close();
-                }
-            } catch (IOException e) {
-                logger.error("failed to close bufferedReader", e);
-            }
             try {
                 if (response != null) {
                     response.close();
@@ -233,5 +225,18 @@ public class RemoteSynonymFile implements SynonymFile {
             }
         }
         return false;
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (httpclient != null) {
+            try {
+                httpclient.close();
+                logger.debug("Closed HttpClient for remote synonym file: {}", location);
+            } catch (IOException e) {
+                logger.error("Error closing HttpClient for {}", location, e);
+                throw e;
+            }
+        }
     }
 }

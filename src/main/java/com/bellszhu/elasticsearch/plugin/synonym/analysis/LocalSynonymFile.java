@@ -137,28 +137,10 @@ public class LocalSynonymFile implements SynonymFile {
      */
     protected Path deepSearch() {
         return env.configFile().resolve(location);
-//        // TODO
-//        SpecialPermission.check();
-//        return AccessController.doPrivileged((PrivilegedAction<Path>) () -> {
-//            return env.configFile().resolve(location);
-////            // access denied：java.io.FilePermission
-////            Path path;
-////            // Load setting config as absolute path
-////            if (Files.exists(Paths.get(location))) { // access denied：java.io.FilePermission
-////                path = Paths.get(location);
-////                // Load from setting config path
-////            } else if (Files.exists(env.configFile().resolve(location))) {
-////                path = env.configFile().resolve(location);
-////                // Load from current relative path
-////            } else {
-////                URL url = getClass().getClassLoader().getResource(location);
-////                if (url != null) {
-////                    path = Paths.get(url.getFile());
-////                } else {
-////                    path = env.configFile().resolve(location);
-////                }
-////            }
-////            return path;
-//        });
+    }
+
+    @Override
+    public void close() throws IOException {
+        // Local file doesn't need cleanup - no persistent resources
     }
 }
